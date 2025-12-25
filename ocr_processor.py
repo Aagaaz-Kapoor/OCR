@@ -250,7 +250,7 @@ class OCRProcessor:
         return detected'''
         
         
-import pytesseract
+'''import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 import re
@@ -692,7 +692,7 @@ class OCRProcessor:
         for key, value in parsed_data.items():
             if key not in ["Date", "Report Type", "Notes"] and value is not None:
                 detected.append(key)
-        return detected
+        return detected'''
 
 '''import pytesseract
 from pdf2image import convert_from_bytes
@@ -850,3 +850,410 @@ class OCRProcessor:
             if key not in ["Date", "Report Type", "Notes"] and value is not None:
                 detected.append(key)
         return detected '''
+
+
+import pytesseract
+from pdf2image import convert_from_bytes
+from PIL import Image
+import re
+from datetime import datetime
+import os
+from config import EXCEL_COLUMNS, TEST_PARAMETERS
+
+class OCRProcessor:
+    def __init__(self):
+        """
+        Cloud Safe Configuration
+        - Do NOT hardcode poppler / tesseract paths
+        - On Streamlit Cloud, system packages from packages.txt handle everything
+        """
+        print("Environment:", os.name)
+        
+        # For Windows local development (optional)
+        if os.name == "nt":
+            try:
+                # Windows specific paths for local development
+                win_tess = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+                if os.path.exists(win_tess):
+                    pytesseract.pytesseract.tesseract_cmd = win_tess
+                    print("Using Windows Tesseract")
+                
+                # Check poppler for Windows
+                poppler_win = r"C:\poppler-25.12.0\Library\bin"
+                if os.path.exists(poppler_win):
+                    self.poppler_path = poppler_win
+                    print("Using Windows Poppler")
+                else:
+                    self.poppler_path = None
+            except:
+                self.poppler_path = None
+        else:
+            # Linux/Streamlit Cloud - use system packages
+            self.poppler_path = None
+        
+        # Check if tesseract is accessible
+        try:
+            pytesseract.get_tesseract_version()
+            print("Tesseract is accessible")
+        except:
+            print("Warning: Tesseract may not be properly configured")
+
+    def extract_text_from_pdf(self, pdf_bytes):
+        """Convert PDF to images and extract text using OCR"""
+        try:
+            # Handle poppler path based on environment
+            if self.poppler_path and os.path.exists(self.poppler_path):
+                images = convert_from_bytes(
+                    pdf_bytes, 
+                    poppler_path=self.poppler_path,
+                    dpi=400,
+                    fmt='jpeg',
+                    grayscale=True
+                )
+            else:
+                # On Streamlit Cloud or Linux, poppler should be in PATH
+                images = convert_from_bytes(
+                    pdf_bytes,
+                    dpi=400,
+                    fmt='jpeg',
+                    grayscale=True
+                )
+            
+            text = ""
+            for i, img in enumerate(images):
+                print(f"Processing page {i+1}/{len(images)}...")
+                
+                # Use different OCR configurations for better accuracy
+                page_text = pytesseract.image_to_string(
+                    img, 
+                    lang='eng',
+                    config='--psm 6 --oem 3'
+                )
+                text += page_text + "\n\n"
+            
+            return text
+            
+        except Exception as e:
+            raise Exception(f"Error processing PDF: {str(e)}")
+
+    def extract_report_date(self, text):
+        """Extract report date from OCR text - Enhanced from local version"""
+        print("=" * 80)
+        print("DEBUG: EXTRACTING REPORT DATE")
+        print("=" * 80)
+        
+        # Common date patterns in medical reports
+        date_patterns = [
+            # DD-MM-YYYY or DD/MM/YYYY (most common in medical reports)
+            r'(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+            # YYYY-MM-DD
+            r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})',
+            # Month DD, YYYY
+            r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})',
+            # DD Month YYYY
+            r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{4})',
+            # Report Date: pattern
+            r'[Rr]eport [Dd]ate[:\s]*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+            r'[Dd]ate[:\s]*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+            # Collected on/Reported on patterns
+            r'[Cc]ollected [Oo]n[:\s]*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+            r'[Rr]eported [Oo]n[:\s]*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+            r'[Pp]rinted [Dd]ate[:\s]*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})',
+        ]
+        
+        # Time patterns (optional)
+        time_patterns = [
+            r'(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?',
+            r'(\d{1,2})\.(\d{2})\s*(AM|PM|am|pm)?',
+        ]
+        
+        extracted_date = None
+        extracted_time = None
+        found_pattern = None
+        
+        # Search for date patterns
+        for pattern in date_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                print(f"DEBUG: Found date pattern: {pattern}")
+                found_pattern = pattern
+                
+                for match in matches:
+                    try:
+                        if len(match) == 3:
+                            day, month, year = match
+                            
+                            # Clean the values
+                            day = str(day).strip()
+                            month = str(month).strip()
+                            year = str(year).strip()
+                            
+                            # Convert 2-digit year to 4-digit
+                            if len(year) == 2:
+                                year_int = int(year)
+                                if year_int <= 30:
+                                    year = '20' + year
+                                else:
+                                    year = '19' + year
+                            
+                            # Handle month names
+                            month_names = {
+                                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+                            }
+                            
+                            if month.isalpha():
+                                month_lower = month.lower()[:3]
+                                if month_lower in month_names:
+                                    month_num = month_names[month_lower]
+                                else:
+                                    continue
+                            else:
+                                month_num = int(month)
+                            
+                            # Create date string
+                            date_str = f"{int(day):02d}-{month_num:02d}-{year}"
+                            
+                            # Try to parse the date
+                            date_formats = [
+                                '%d-%m-%Y',  # DD-MM-YYYY
+                                '%m-%d-%Y',  # MM-DD-YYYY
+                                '%Y-%m-%d',  # YYYY-MM-DD
+                                '%d/%m/%Y',  # DD/MM/YYYY
+                                '%m/%d/%Y',  # MM/DD/YYYY
+                            ]
+                            
+                            for fmt in date_formats:
+                                try:
+                                    extracted_date = datetime.strptime(date_str, fmt)
+                                    break
+                                except ValueError:
+                                    continue
+                            
+                            if extracted_date:
+                                break
+                    
+                    except Exception as e:
+                        print(f"DEBUG: Error parsing date {match}: {e}")
+                        continue
+                
+                if extracted_date:
+                    break
+        
+        # If no date found in patterns, look for date-like strings in context
+        if not extracted_date:
+            print("DEBUG: No date found with patterns, searching in context...")
+            lines = text.split('\n')
+            for line in lines:
+                line_lower = line.lower()
+                if any(keyword in line_lower for keyword in ['date', 'collected', 'reported', 'printed', 'sample']):
+                    date_matches = re.findall(r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', line)
+                    if date_matches:
+                        try:
+                            date_str = date_matches[0]
+                            for fmt in ['%d-%m-%Y', '%d/%m/%Y', '%m-%d-%Y', '%m/%d/%Y']:
+                                try:
+                                    extracted_date = datetime.strptime(date_str, fmt)
+                                    break
+                                except:
+                                    continue
+                        except Exception:
+                            pass
+        
+        # Extract time if available
+        for pattern in time_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                for match in matches:
+                    try:
+                        hour, minute, period = match[0], match[1], match[2] if len(match) > 2 else ''
+                        hour = int(hour)
+                        minute = int(minute)
+                        
+                        # Convert to 24-hour format
+                        if period and period.upper() == 'PM' and hour < 12:
+                            hour += 12
+                        elif period and period.upper() == 'AM' and hour == 12:
+                            hour = 0
+                        
+                        extracted_time = f"{hour:02d}:{minute:02d}"
+                        break
+                    except Exception:
+                        continue
+                
+                if extracted_time:
+                    break
+        
+        # If still no date found, use current date as fallback
+        if not extracted_date:
+            print("DEBUG: No date found in report, using current date as fallback")
+            extracted_date = datetime.now()
+        
+        # Format the date for display and storage
+        formatted_date = extracted_date.strftime("%Y-%m-%d")
+        
+        # Add time if extracted
+        if extracted_time:
+            formatted_date = f"{formatted_date} {extracted_time}"
+        
+        print(f"DEBUG: Final extracted date: {formatted_date}")
+        print("=" * 80)
+        return formatted_date, extracted_date
+
+    def detect_report_type(self, text):
+        """Automatically detect the type of medical report"""
+        text_lower = text.lower()
+        
+        # Check for specific test indicators
+        if any(keyword in text_lower for keyword in ['liver function', 'lft', 'sgot', 'sgpt', 'bilirubin']):
+            return "Liver Function Test (LFT)"
+        elif any(keyword in text_lower for keyword in ['complete blood', 'cbc', 'cbp', 'mcv', 'mch', 'mchc', 'hemoglobin', 'rbc', 'wbc']):
+            return "Complete Blood Picture (CBP)"
+        elif any(keyword in text_lower for keyword in ['thyroid', 'tsh', 't3', 't4', 'triiodothyronine', 'thyroxine']):
+            return "Thyroid Test"
+        elif any(keyword in text_lower for keyword in ['blood pressure', 'heart rate', 'temperature', 'vitals']):
+            return "Vitals Check"
+        else:
+            return "Blood Test"
+
+    def extract_value_with_keywords(self, text, keywords, allow_decimal=True):
+        """Extract numerical value associated with multiple keyword variations"""
+        text_lower = text.lower()
+        
+        for keyword in keywords:
+            # More flexible pattern matching
+            patterns = [
+                rf"{keyword}[:\s\-=]*([0-9]+\.?[0-9]*)\s*[mg/dlµl%]?",
+                rf"{keyword}.*?([0-9]+\.?[0-9]*)\s*[mg/dlµl%]?",
+                rf"([0-9]+\.?[0-9]*)\s*[mg/dlµl%]?\s*{keyword}",
+            ]
+            
+            for pattern in patterns:
+                matches = re.findall(pattern, text_lower, re.IGNORECASE)
+                if matches:
+                    try:
+                        value = float(matches[0])
+                        return value
+                    except:
+                        continue
+        return None
+
+    def parse_medical_report(self, text):
+        """Parse medical report text and extract all parameters"""
+        print("=" * 80)
+        print("DEBUG: Starting parse_medical_report")
+        print(f"DEBUG: Text length: {len(text)} chars")
+        print("=" * 80)
+        
+        # Initialize data structure with all columns
+        data = {col: None for col in EXCEL_COLUMNS}
+        
+        # Extract report date from text instead of using current date
+        formatted_date, datetime_obj = self.extract_report_date(text)
+        data["Date"] = formatted_date
+        
+        data["Report Type"] = self.detect_report_type(text)
+        data["Notes"] = ""
+        
+        # Enhanced keyword mapping with better patterns
+        keyword_map = {
+            # Liver Function Test
+            "Total Bilirubin": ["total bilirubin", "bilirubin.*total", "t\.?\s*bilirubin"],
+            "Conjugated Bilirubin": ["conjugated bilirubin", "direct bilirubin", "d\.?\s*bilirubin"],
+            "Unconjugated Bilirubin": ["unconjugated bilirubin", "indirect bilirubin", "i\.?\s*bilirubin"],
+            "SGOT (AST)": ["sgot", "ast", "aspartate", "sgot.*ast", "ast.*sgot"],
+            "SGPT (ALT)": ["sgpt", "alt", "alanine", "sgpt.*alt", "alt.*sgpt"],
+            "Alkaline Phosphatase": ["alkaline phosphatase", "alp", "alk\.?\s*phosphatase"],
+            "Total Protein": ["total protein", "protein.*total", "serum protein"],
+            "Albumin": ["albumin", "serum albumin"],
+            "Globulin": ["globulin", "serum globulin"],
+            "A/G Ratio": ["a/g ratio", "a:g ratio", "albumin.*globulin", "ag ratio"],
+            
+            # Complete Blood Picture
+            "Hemoglobin": ["hemoglobin", "hb", "haemoglobin"],
+            "RBC": ["rbc", "red blood", "rbc count", "red cell"],
+            "WBC": ["wbc", "white blood", "wbc count", "leucocyte", "leukocyte"],
+            "Platelets": ["platelet", "platelets", "platelet count"],
+            "PCV/HCT": ["pcv", "hct", "hematocrit", "haematocrit", "packed cell"],
+            "MCV": ["mcv", "mean corpuscular volume"],
+            "MCH": ["mch", "mean corpuscular hemoglobin"],
+            "MCHC": ["mchc", "mean corpuscular hemoglobin concentration"],
+            "RDW-CV": ["rdw", "rdw-cv", "red cell distribution"],
+            "MPV": ["mpv", "mean platelet volume"],
+            "Neutrophils": ["neutrophils", "neutrophil"],
+            "Lymphocytes": ["lymphocytes", "lymphocyte"],
+            "Monocytes": ["monocytes", "monocyte"],
+            "Eosinophils": ["eosinophils", "eosinophil"],
+            
+            # Gamma GT
+            "Gamma Glutamyl Transferase": ["gamma glutamyl", "ggt", "gamma.*gt"],
+            
+            # Additional
+            "Glucose": ["glucose", "blood sugar"],
+            "Cholesterol": ["cholesterol", "total cholesterol"],
+        }
+        
+        # Extract values for all parameters
+        extracted_count = 0
+        for param_name, keywords in keyword_map.items():
+            value = self.extract_value_with_keywords(text, keywords)
+            if value is not None:
+                data[param_name] = value
+                extracted_count += 1
+        
+        print(f"DEBUG: Extracted {extracted_count} parameters")
+        
+        # Special handling for structured table format
+        lines = text.split('\n')
+        
+        # Extract blood pressure
+        bp_pattern = r"(\d{2,3})/(\d{2,3})"
+        bp_matches = re.findall(bp_pattern, text)
+        if bp_matches:
+            data["Blood Pressure Systolic"] = float(bp_matches[0][0])
+            data["Blood Pressure Diastolic"] = float(bp_matches[0][1])
+        
+        # Calculate derived values
+        if data["Albumin"] and data["Total Protein"]:
+            if data["Globulin"] is None:
+                data["Globulin"] = round(data["Total Protein"] - data["Albumin"], 2)
+            
+            if data["A/G Ratio"] is None and data["Globulin"] and data["Globulin"] > 0:
+                data["A/G Ratio"] = round(data["Albumin"] / data["Globulin"], 2)
+        
+        # Print summary
+        print("=" * 80)
+        print("DEBUG: EXTRACTED PARAMETERS SUMMARY:")
+        for key, value in data.items():
+            if value is not None:
+                print(f"  {key}: {value}")
+        print("=" * 80)
+        
+        return data
+
+    def process_pdf_report(self, pdf_bytes):
+        """Main method to process PDF and return structured data"""
+        print("=" * 80)
+        print("DEBUG: STARTING PDF PROCESSING")
+        print("=" * 80)
+        
+        text = self.extract_text_from_pdf(pdf_bytes)
+        
+        # Show OCR output summary
+        print(f"OCR extracted {len(text)} characters")
+        
+        parsed_data = self.parse_medical_report(text)
+        
+        print("=" * 80)
+        print("DEBUG: PROCESSING COMPLETE")
+        print("=" * 80)
+        
+        return parsed_data, text
+
+    def get_detected_parameters(self, parsed_data):
+        """Get list of parameters that were successfully detected"""
+        detected = []
+        for key, value in parsed_data.items():
+            if key not in ["Date", "Report Type", "Notes"] and value is not None:
+                detected.append(key)
+        return detected
