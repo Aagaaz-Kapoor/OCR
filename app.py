@@ -118,6 +118,10 @@ def upload_page(data_manager, ocr_processor):
                 
                 st.success("PDF processed successfully!")
                 
+                # Show extracted date prominently
+                extracted_date = parsed_data.get("Date", "Not found")
+                st.info(f"📅 **Extracted Report Date:** {extracted_date}")
+                
                 # Get detected parameters
                 detected_params = ocr_processor.get_detected_parameters(parsed_data)
                 
@@ -133,7 +137,7 @@ def upload_page(data_manager, ocr_processor):
                     with col_debug1:
                         st.metric("Total Parameters Detected", len(detected_params))
                     with col_debug2:
-                        st.metric("OCR Text Length", f"{len(extracted_text):,} chars")
+                        st.metric("Extracted Report Date", extracted_date)
                     
                     st.write("### 📋 Detected Parameters List")
                     if detected_params:
@@ -155,22 +159,6 @@ def upload_page(data_manager, ocr_processor):
                             st.write(", ".join(other_params))
                     else:
                         st.write("No parameters detected")
-                    
-                    st.write("### 📄 All Extracted Values")
-                    if detected_params:
-                        # Create a table of detected values
-                        debug_data = []
-                        for param in detected_params:
-                            value = parsed_data.get(param)
-                            if value is not None:
-                                debug_data.append({
-                                    "Parameter": param,
-                                    "Value": value,
-                                    "Type": "Detected"
-                                })
-                        
-                        if debug_data:
-                            st.dataframe(pd.DataFrame(debug_data), use_container_width=True, hide_index=True)
                     
                     st.write("### 🔤 Raw OCR Text Sample (First 2000 characters)")
                     st.text_area("OCR Output", extracted_text[:2000], height=300, label_visibility="collapsed")
@@ -196,7 +184,7 @@ def upload_page(data_manager, ocr_processor):
                     new_report_type = st.selectbox(
                         "Select Test Type",
                         REPORT_TYPES,
-                        index=REPORT_TYPES.index(st.session_state.selected_report_type),
+                        index=REPORT_TYPES.index(st.session_state.selected_report_type) if st.session_state.selected_report_type in REPORT_TYPES else 0,
                         key="report_type_selector"
                     )
                 
@@ -222,7 +210,31 @@ def upload_page(data_manager, ocr_processor):
                         st.markdown("### Basic Information")
                         col_basic1, col_basic2 = st.columns(2)
                         with col_basic1:
-                            parsed_data["Date"] = st.date_input("Date", value=pd.to_datetime(parsed_data["Date"]))
+                            # Convert extracted date string to datetime for the date input
+                            try:
+                                # Try to parse the extracted date (might have time component)
+                                date_str = parsed_data["Date"]
+                                # If there's a space, it has time, take just the date part
+                                if " " in date_str:
+                                    date_part = date_str.split(" ")[0]
+                                else:
+                                    date_part = date_str
+                                
+                                # Convert to datetime
+                                date_obj = pd.to_datetime(date_part)
+                                parsed_data["Date"] = st.date_input(
+                                    "Report Date", 
+                                    value=date_obj,
+                                    help="Date extracted from the report. You can modify if incorrect."
+                                )
+                            except:
+                                # Fallback to current date if extraction failed
+                                parsed_data["Date"] = st.date_input(
+                                    "Report Date", 
+                                    value=pd.to_datetime("today"),
+                                    help="Date extracted from the report. You can modify if incorrect."
+                                )
+                                
                         with col_basic2:
                             st.info(f"Report Type: {parsed_data['Report Type']}")
                         
@@ -353,7 +365,7 @@ def upload_page(data_manager, ocr_processor):
             except Exception as e:
                 st.error(f"Error processing PDF: {str(e)}")
                 st.info("Make sure Tesseract OCR and Poppler are installed on your system")
-
+                
 def dashboard_page(data_manager, visualizer):
     st.title("📊 Health Dashboard")
     
@@ -439,7 +451,7 @@ def dashboard_page(data_manager, visualizer):
 def all_reports_page(data_manager):
     st.title("📋 All Medical Reports")
     
-    df = data_manager.get_all_reports()
+    df = data_manager.get_all_reports()  # This now returns dates formatted as YYYY-MM-DD
     
     if df.empty:
         st.info("No reports found. Upload your first medical report to get started!")
@@ -456,7 +468,7 @@ def all_reports_page(data_manager):
     else:
         df_display = df
     
-    # Display dataframe
+    # Display dataframe WITHOUT index
     st.dataframe(
         df_display.style.format(precision=2),
         use_container_width=True,
